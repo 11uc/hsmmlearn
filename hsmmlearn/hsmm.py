@@ -1,7 +1,7 @@
 import numpy as np
 
 from .base import _viterbi_impl, _fb_impl
-from .emissions import GaussianEmissions, MultinomialEmissions
+from .emissions import *
 from .properties import Durations, Emissions, TransitionMatrix
 
 
@@ -278,14 +278,21 @@ class HSMMModel(object):
             if censoring:
                 denominator += l[:, -1]
             new_durations = eta / denominator[:, np.newaxis]
+            # if eta is 0, durations should be 0, lch
+            new_durations[eta == 0] = 0
 
             # Re-estimate emissions
             self.emissions.reestimate(l, obs)
 
             # Reassign!
             self.tmat = new_tmat
+            # if absorb:
+                # self.durations[:-1] = new_durations[:-1]
+            # else:
             self.durations = new_durations
             self._startprob = new_pi
+
+            print("step", step, "llh", llh)
 
         if err != 0:
             # An error occurred.
@@ -295,8 +302,8 @@ class HSMMModel(object):
             self._startprob = old_startprob
             raise NoConvergenceError(
                 "The forward-backward algorithm encountered an internal error "
-                "after {} steps. Try reducing the `num_iter` parameter. "
-                "Log-likelihood procession: {}.".format(step, log_likelihoods))
+                "(code: {}) after {} steps. Try reducing the `num_iter` parameter. "
+                "Log-likelihood procession: {}.".format(err, step, log_likelihoods))
 
         return has_converged, llh
 
@@ -344,3 +351,73 @@ class MultinomialHSMM(HSMMModel):
             emissions, durations, tmat,
             startprob=startprob, support_cutoff=support_cutoff
         )
+
+class MultiVariateBernoulliHSMM(HSMMModel):
+    """
+    A HSMM class with multivariate bernoulli emissions. The probabilities
+    matrix P should be n_states * n_variables, p_ij = P(X = 1).
+    P(X = 0) = 1 - p_ij. The observations will be 2d due to multiple 
+    variables, n_samples * n_variables.
+    """
+    def __init__(self, probabilities, durations, tmat,
+                 startprob=None, support_cutoff=100):
+
+        self.n_variables = probabilities.shape[1]
+        emissions = MultiVariateBernoulliEmissions(probabilities)
+        super(MultiVariateBernoulliHSMM, self).__init__(
+            emissions, durations, tmat,
+            startprob=startprob, support_cutoff=support_cutoff
+        )
+
+    def sample(self, n_samples=1):
+        """ Generate a random sample from the HSMM. Overload due to 
+        change of observations format.
+
+        Parameters
+        ----------
+        n_samples : int
+             Number of samples to generate.
+
+        Returns
+        -------
+        observations: numpy.ndarray, shape = (n_sample, n_vairables)
+            Random sample of observations.
+        states : numpy.ndarray, shape=(n_samples, )
+            Random sample internal states.
+        """
+        state = np.random.choice(self.n_states, p=self._startprob)
+        duration = np.random.choice(
+            self.n_durations, p=self._durations[state]) + 1
+
+        if n_samples == 1:
+            obs = self.emissions.sample_for_state(state)
+            return obs, state
+
+        states = np.empty(n_samples, dtype=int)
+        observations = np.empty((n_samples, self.n_variables), 
+                dtype=self.emissions.dtype)
+
+        # Generate states array.
+        state_idx = 0
+        while state_idx < n_samples:
+            # Adjust for right censoring (the last state may still be going on
+            # when we reach the limit on the number of samples to generate).
+            if state_idx + duration > n_samples:
+                duration = n_samples - state_idx
+
+            states[state_idx:state_idx+duration] = state
+            state_idx += duration
+
+            state = np.random.choice(self.n_states, p=self._tmat[state])
+            duration = np.random.choice(
+                self.n_durations, p=self._durations[state]
+            ) + 1
+
+        # Generate observations.
+        for state in range(self.n_states):
+            state_mask = states == state
+            observations[state_mask] = self.emissions.sample_for_state(
+                state, size=state_mask.sum(),
+            )
+
+        return observations, states

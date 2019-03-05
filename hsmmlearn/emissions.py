@@ -187,3 +187,63 @@ class GaussianEmissions(AbstractEmissions):
 
         self.means = new_means
         self.scales = new_scales
+
+class MultiVariateBernoulliEmissions(AbstractEmissions):
+    """ An emissions class for multivariate multinomial emissions.
+
+    This models the case where each state has multiple  discrete Bernoulli
+    emission observations as units, which are assumed to be independent. Using
+    this emission distribution, the observations and probabilities needs to be 
+    converted between M dimensions and 1 dimension.
+
+    """
+
+    # TODO this is only used by sample() and can be eliminated by inferring the
+    # dtype from the generated samples.
+    dtype = np.int64
+
+    def __init__(self, probabilities):
+        """
+        Arguments
+        ---------
+        probabilities: 2d numpy array
+            mission probabilities (states * units)
+        """
+        self._update(probabilities)
+
+    def _update(self, probabilities):
+        _probabilities = np.asarray(probabilities)
+        # clip small neg residual (GH #34)
+        _probabilities[_probabilities < 0] = 0
+
+        self._probabilities = _probabilities
+        self._NVariables = _probabilities.shape[1]  # number of variables
+
+    def likelihood(self, obs):
+        probs = []
+        for ob in obs:
+            prob = self._probabilities[:, ob.astype(bool)].prod(1) * \
+                    (1 - self._probabilities[:, ~ob.astype(bool)]).prod(1)
+            probs.append(prob[:, np.newaxis])
+        return np.hstack(probs)
+
+    def copy(self):
+        return MultiVariateBernoulliEmissions(self._probabilities.copy())
+
+    def sample_for_state(self, state, size=None):
+        if size == None:
+            ob = np.array([np.random.binomial(1, p) for 
+                    p in self._probabilities[state]])
+        else:
+            ob = np.zeros((size, self._NVariables))
+            for i in range(size):
+                ob[i] = np.array([np.random.binomial(1, p) for 
+                        p in self._probabilities[state]])
+        return ob
+
+    def reestimate(self, gamma, observations):
+        new_emissions = np.empty_like(self._probabilities)
+        for v in range(new_emissions.shape[1]):
+            new_emissions[:, v] = gamma[:, observations[:, v].astype(bool)].sum(1)
+        new_emissions /= gamma.sum(1)[:, np.newaxis]
+        self._update(new_emissions)

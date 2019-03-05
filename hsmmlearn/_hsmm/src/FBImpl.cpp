@@ -134,7 +134,8 @@ void FBImpl(int CensoringPara, int tauPara, int JPara, int MPara,
                     }
                 }
 
-                if (F[j][t] <= 0)
+                if (F[j][t] < 0)  
+				// Allow F_j(0) to be zero when pi_j = 0 or p_ij = 0 (i != j), by lch
                 {
                     throw var_nonpositive_exception();
                 }
@@ -170,7 +171,12 @@ void FBImpl(int CensoringPara, int tauPara, int JPara, int MPara,
 
                     if (u < tau - 1 - t)
                     {
-                        H[j][t + 1][u] = L1[j][t + u] * Observ * d[j][u] / F[j][t + u];
+						// H_j[t] should be 0 if F_j[t] is 0, lch
+						if (F[j][t + u] == 0)
+							H[j][t + 1][u] = 0;
+						else
+							H[j][t + 1][u] = 
+								L1[j][t + u] * Observ * d[j][u] / F[j][t + u];
                     }
                     else
                     {
@@ -183,10 +189,14 @@ void FBImpl(int CensoringPara, int tauPara, int JPara, int MPara,
             for (j = 0; j <= J - 1; j++)
             {
                 L1[j][t] = 0;
-                for (k = 0; k <= J - 1; k++)
-                    L1[j][t] += G[k][t + 1] * p[j][k];
-                L1[j][t] *= F[j][t];
-                L[j][t] = L1[j][t] + L[j][t + 1] - G[j][t + 1] * StateIn[j][t + 1];
+				L[j][t] = 0;
+				// When F_j(t) == 0, L_j(t) and L1_j(t) are 0, lch
+				if (F[j][t] != 0) {
+					for (k = 0; k <= J - 1; k++)
+						L1[j][t] += G[k][t + 1] * p[j][k];
+					L1[j][t] *= F[j][t];
+					L[j][t] = L1[j][t] + L[j][t + 1] - G[j][t + 1] * StateIn[j][t + 1];
+				}
             }
         }
 
@@ -274,7 +284,10 @@ void FBImpl(int CensoringPara, int tauPara, int JPara, int MPara,
                         {
                             for (v = 1; v <= u; v++)
                                 r *= pdf[j][u - v] / N[u - v];
-                            r *= L1[j][u - 1] / F[j][u - 1];
+							if (F[j][u - 1] == 0)  // in case F_j(u - 1) is 0, lch
+								r = 0;
+							else
+								r *= L1[j][u - 1] / F[j][u - 1];
                         }
                         else
                             for (v = 1; v <= tau; v++)
